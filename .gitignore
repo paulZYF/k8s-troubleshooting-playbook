@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.venv/
+# KEEP scenarios/*/output/run.json: the write-ups are built from these recorded runs

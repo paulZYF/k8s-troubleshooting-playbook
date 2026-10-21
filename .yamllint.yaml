@@ -1,0 +1,5 @@
+extends: relaxed
+ignore: |
+  scenarios/11-helm-upgrade-rollback/chart/templates/
+rules:
+  line-length: disable
