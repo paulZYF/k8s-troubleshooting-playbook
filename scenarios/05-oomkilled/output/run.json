@@ -1,0 +1,69 @@
+{
+  "scenario": "05-oomkilled",
+  "namespace": "pb-05",
+  "started": "2026-10-20T19:53:02-0700",
+  "kubectl": "v1.34.0",
+  "steps": [
+    {
+      "phase": "break",
+      "cmd": "kubectl -n pb-05 apply -f $DIR/broken.yaml",
+      "rc": 0,
+      "output": "deployment.apps/report-worker created",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                             READY   STATUS    RESTARTS      AGE\nreport-worker-6f898dc646-xhntf   1/1     Running   2 (16s ago)   21s",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS describe pod -l app=report-worker | sed -n '/Containers:/,/Conditions:/p' | grep -E 'State|Reason|Exit Code|Restart Count|Limits|memory'",
+      "rc": 0,
+      "output": "    State:          Running\n    Last State:     Terminated\n      Reason:       OOMKilled\n      Exit Code:    137\n    Restart Count:  2\n    Limits:\n      memory:  64Mi\n      memory:     64Mi",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS logs deploy/report-worker --previous",
+      "rc": 0,
+      "output": "loading report data\nstress: info: [1] dispatching hogs: 0 cpu, 0 io, 1 vm, 0 hdd",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get events --sort-by=.lastTimestamp -o custom-columns=REASON:.reason,MESSAGE:.message | tail -5",
+      "rc": 0,
+      "output": "ScalingReplicaSet   Scaled up replica set report-worker-6f898dc646 from 0 to 1\nBackOff             Back-off restarting failed container worker in pod report-worker-6f898dc646-xhntf_pb-05(936684e4-de27-4e8d-b3b6-6191feccaa56)\nPulled              Container image \"polinux/stress:1.0.4\" already present on machine\nCreated             Created container: worker\nStarted             Started container worker",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n pb-05 apply -f $DIR/fixed.yaml",
+      "rc": 0,
+      "output": "deployment.apps/report-worker configured",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                             READY   STATUS    RESTARTS   AGE\nreport-worker-6b9597956f-6fxww   1/1     Running   0          21s",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS top pod 2>/dev/null || echo \"(metrics-server not installed; see Grafana 'Workload health' for memory usage)\"",
+      "rc": 0,
+      "output": "(metrics-server not installed; see Grafana 'Workload health' for memory usage)",
+      "show": true
+    }
+  ],
+  "broken_detected": true,
+  "broken_after_s": 21.4,
+  "fixed": true,
+  "recovery_s": 21.3,
+  "finished": "2026-10-20T19:53:45-0700"
+}

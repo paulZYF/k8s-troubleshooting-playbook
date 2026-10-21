@@ -1,0 +1,76 @@
+{
+  "scenario": "09-dns-blocked-by-networkpolicy",
+  "namespace": "pb-09",
+  "started": "2026-10-20T19:54:30-0700",
+  "kubectl": "v1.34.0",
+  "steps": [
+    {
+      "phase": "break",
+      "cmd": "kubectl -n pb-09 apply -f $DIR/broken.yaml",
+      "rc": 0,
+      "output": "networkpolicy.networking.k8s.io/default-deny-egress created\ndeployment.apps/api created",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS exec deploy/api -- nslookup -timeout=2 kubernetes.default.svc.cluster.local",
+      "rc": 0,
+      "output": "Server:\t\t10.96.0.10\nAddress:\t10.96.0.10:53\n\n\nName:\tkubernetes.default.svc.cluster.local\nAddress: 10.96.0.1",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n kube-system get pods -l k8s-app=kube-dns",
+      "rc": 0,
+      "output": "NAME                       READY   STATUS    RESTARTS   AGE\ncoredns-66bc5c9577-pddvw   1/1     Running   0          30m\ncoredns-66bc5c9577-zpbpp   1/1     Running   0          30m",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl run dns-check -n default --rm -i --restart=Never --image=busybox:1.36 -- nslookup -timeout=2 kubernetes.default.svc.cluster.local 2>&1 | grep -v 'pod .* deleted'",
+      "rc": 0,
+      "output": "Server:\t\t10.96.0.10\nAddress:\t10.96.0.10:53\n\n\nName:\tkubernetes.default.svc.cluster.local\nAddress: 10.96.0.1",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS exec deploy/api -- cat /etc/resolv.conf",
+      "rc": 0,
+      "output": "search pb-09.svc.cluster.local svc.cluster.local cluster.local\nnameserver 10.96.0.10\noptions ndots:5",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get networkpolicy",
+      "rc": 0,
+      "output": "NAME                  POD-SELECTOR   AGE\ndefault-deny-egress   <none>         3m6s",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS describe networkpolicy default-deny-egress | sed -n '/Spec:/,$p'",
+      "rc": 0,
+      "output": "Spec:\n  PodSelector:     <none> (Allowing the specific traffic to all pods in this namespace)\n  Not affecting ingress traffic\n  Allowing egress traffic:\n    To Port: 80/TCP\n    To:\n      PodSelector: <none>\n  Policy Types: Egress",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n pb-09 apply -f $DIR/fixed.yaml",
+      "rc": 0,
+      "output": "networkpolicy.networking.k8s.io/default-deny-egress configured\ndeployment.apps/api unchanged",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS exec deploy/api -- nslookup -timeout=2 kubernetes.default.svc.cluster.local",
+      "rc": 0,
+      "output": "Server:\t\t10.96.0.10\nAddress:\t10.96.0.10:53\n\n\nName:\tkubernetes.default.svc.cluster.local\nAddress: 10.96.0.1",
+      "show": true
+    }
+  ],
+  "broken_detected": false,
+  "broken_after_s": 182.7,
+  "fixed": true,
+  "recovery_s": 0.2,
+  "finished": "2026-10-20T19:57:36-0700"
+}

@@ -1,0 +1,97 @@
+{
+  "scenario": "11-helm-upgrade-rollback",
+  "namespace": "pb-11",
+  "started": "2026-10-20T20:02:21-0700",
+  "kubectl": "v1.34.0",
+  "steps": [
+    {
+      "phase": "break",
+      "cmd": "helm upgrade --install catalog $DIR/chart -n $NS -f $DIR/values-v1.yaml --wait --timeout 120s",
+      "rc": 0,
+      "output": "Release \"catalog\" does not exist. Installing it now.\nNAME: catalog\nLAST DEPLOYED: Tue Oct 20 20:02:22 2026\nNAMESPACE: pb-11\nSTATUS: deployed\nREVISION: 1\nTEST SUITE: None",
+      "show": true
+    },
+    {
+      "phase": "break",
+      "cmd": "helm upgrade catalog $DIR/chart -n $NS -f $DIR/broken.yaml --wait --timeout 60s",
+      "rc": 1,
+      "output": "Error: UPGRADE FAILED: context deadline exceeded",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "helm -n $NS history catalog",
+      "rc": 0,
+      "output": "REVISION\tUPDATED                 \tSTATUS  \tCHART        \tAPP VERSION\tDESCRIPTION                                        \n1       \tTue Oct 20 20:02:22 2026\tdeployed\tcatalog-0.1.0\t1.27       \tInstall complete                                   \n2       \tTue Oct 20 20:02:24 2026\tfailed  \tcatalog-0.1.0\t1.27       \tUpgrade \"catalog\" failed: context deadline exceeded",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                       READY   STATUS         RESTARTS   AGE\ncatalog-55b4c487b8-6w92r   1/1     Running        0          62s\ncatalog-55b4c487b8-kprgz   1/1     Running        0          62s\ncatalog-6db9f5645b-b25vk   0/1     ErrImagePull   0          60s",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get rs -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,IMAGE:.spec.template.spec.containers[0].image",
+      "rc": 0,
+      "output": "NAME                 DESIRED   READY    IMAGE\ncatalog-55b4c487b8   2         2        nginx:1.27-alpine\ncatalog-6db9f5645b   1         <none>   nginx:1.28-alpne",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get events --field-selector reason=Failed -o custom-columns=MESSAGE:.message | cut -c1-220 | head -3",
+      "rc": 0,
+      "output": "MESSAGE\nFailed to pull image \"nginx:1.28-alpne\": rpc error: code = NotFound desc = failed to pull and unpack image \"docker.io/library/nginx:1.28-alpne\": failed to resolve reference \"docker.io/library/nginx:1.28-alpne\": docker.io\nError: ErrImagePull",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "helm -n $NS get values catalog",
+      "rc": 0,
+      "output": "USER-SUPPLIED VALUES:\nimage:\n  tag: 1.28-alpne",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "helm -n $NS rollback catalog 1 --wait --timeout 120s",
+      "rc": 0,
+      "output": "Rollback was a success! Happy Helming!",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "helm -n $NS history catalog",
+      "rc": 0,
+      "output": "REVISION\tUPDATED                 \tSTATUS    \tCHART        \tAPP VERSION\tDESCRIPTION                                        \n1       \tTue Oct 20 20:02:22 2026\tsuperseded\tcatalog-0.1.0\t1.27       \tInstall complete                                   \n2       \tTue Oct 20 20:02:24 2026\tfailed    \tcatalog-0.1.0\t1.27       \tUpgrade \"catalog\" failed: context deadline exceeded\n3       \tTue Oct 20 20:03:24 2026\tdeployed  \tcatalog-0.1.0\t1.27       \tRollback to 1",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "helm upgrade catalog $DIR/chart -n $NS -f $DIR/fixed.yaml --wait --timeout 120s",
+      "rc": 0,
+      "output": "Release \"catalog\" has been upgraded. Happy Helming!\nNAME: catalog\nLAST DEPLOYED: Tue Oct 20 20:03:26 2026\nNAMESPACE: pb-11\nSTATUS: deployed\nREVISION: 4\nTEST SUITE: None",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "helm -n $NS history catalog",
+      "rc": 0,
+      "output": "REVISION\tUPDATED                 \tSTATUS    \tCHART        \tAPP VERSION\tDESCRIPTION                                        \n1       \tTue Oct 20 20:02:22 2026\tsuperseded\tcatalog-0.1.0\t1.27       \tInstall complete                                   \n2       \tTue Oct 20 20:02:24 2026\tfailed    \tcatalog-0.1.0\t1.27       \tUpgrade \"catalog\" failed: context deadline exceeded\n3       \tTue Oct 20 20:03:24 2026\tsuperseded\tcatalog-0.1.0\t1.27       \tRollback to 1                                      \n4       \tTue Oct 20 20:03:26 2026\tdeployed  \tcatalog-0.1.0\t1.27       \tUpgrade complete",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS get pods -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,IMAGE:.spec.containers[0].image",
+      "rc": 0,
+      "output": "NAME                       STATUS      IMAGE\ncatalog-55b4c487b8-kprgz   Succeeded   nginx:1.27-alpine\ncatalog-66675c7c79-f7ltd   Running     nginx:1.28-alpine\ncatalog-66675c7c79-s9gxp   Running     nginx:1.28-alpine",
+      "show": true
+    }
+  ],
+  "broken_detected": true,
+  "broken_after_s": 0.1,
+  "fixed": true,
+  "recovery_s": 4.4,
+  "finished": "2026-10-20T20:03:29-0700"
+}

@@ -1,0 +1,90 @@
+{
+  "scenario": "12-pod-evicted-disk-pressure",
+  "namespace": "pb-12",
+  "started": "2026-10-20T19:59:03-0700",
+  "kubectl": "v1.34.0",
+  "steps": [
+    {
+      "phase": "break",
+      "cmd": "kubectl -n pb-12 apply -f $DIR/broken.yaml",
+      "rc": 0,
+      "output": "deployment.apps/log-writer created",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                          READY   STATUS    RESTARTS   AGE\nlog-writer-5f8596c6f4-rkxfg   1/1     Running   0          3s\nlog-writer-5f8596c6f4-zzqjn   0/1     Error     0          22s",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get pods -l app=log-writer -o jsonpath='{range .items[?(@.status.reason==\"Evicted\")]}{.metadata.name}{\"  \"}{.status.message}{\"\\n\"}{end}' | head -2",
+      "rc": 0,
+      "output": "log-writer-5f8596c6f4-zzqjn  Pod ephemeral local storage usage exceeds the total limit of containers 100Mi.",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get events --field-selector reason=Evicted -o custom-columns=REASON:.reason,MESSAGE:.message | head -3",
+      "rc": 0,
+      "output": "REASON    MESSAGE\nEvicted   Pod ephemeral local storage usage exceeds the total limit of containers 100Mi.",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl describe node | grep -E 'DiskPressure|MemoryPressure|PIDPressure'",
+      "rc": 0,
+      "output": "  MemoryPressure   False   Tue, 20 Oct 2026 19:59:17 -0700   Tue, 20 Oct 2026 19:27:04 -0700   KubeletHasSufficientMemory   kubelet has sufficient memory available\n  DiskPressure     False   Tue, 20 Oct 2026 19:59:17 -0700   Tue, 20 Oct 2026 19:27:04 -0700   KubeletHasNoDiskPressure     kubelet has no disk pressure\n  PIDPressure      False   Tue, 20 Oct 2026 19:59:17 -0700   Tue, 20 Oct 2026 19:27:04 -0700   KubeletHasSufficientPID      kubelet has sufficient PID available\n  Normal  NodeHasNoDiskPressure    32m   kubelet          Node playbook-control-plane status is now: NodeHasNoDiskPressure",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get deploy log-writer -o jsonpath='{.spec.template.spec.containers[0].resources}{\"\\n\"}'",
+      "rc": 0,
+      "output": "{\"limits\":{\"ephemeral-storage\":\"100Mi\",\"memory\":\"32Mi\"},\"requests\":{\"cpu\":\"10m\",\"ephemeral-storage\":\"50Mi\",\"memory\":\"16Mi\"}}",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n $NS apply -f $DIR/fixed.yaml",
+      "rc": 0,
+      "output": "deployment.apps/log-writer configured",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n $NS rollout status deploy/log-writer --timeout=120s",
+      "rc": 0,
+      "output": "Waiting for deployment \"log-writer\" rollout to finish: 1 old replicas are pending termination...\nWaiting for deployment \"log-writer\" rollout to finish: 1 old replicas are pending termination...\ndeployment \"log-writer\" successfully rolled out",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n $NS delete pods --field-selector=status.phase=Failed",
+      "rc": 0,
+      "output": "pod \"log-writer-5f8596c6f4-zzqjn\" deleted from pb-12 namespace",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                         READY   STATUS    RESTARTS   AGE\nlog-writer-b7886b9f4-wpdnl   1/1     Running   0          46s",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS exec deploy/log-writer -- du -sh /scratch",
+      "rc": 0,
+      "output": "20.0M\t/scratch",
+      "show": true
+    }
+  ],
+  "broken_detected": true,
+  "broken_after_s": 21.4,
+  "fixed": true,
+  "recovery_s": 46.0,
+  "finished": "2026-10-20T20:00:11-0700"
+}

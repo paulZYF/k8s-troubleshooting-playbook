@@ -1,0 +1,83 @@
+{
+  "scenario": "08-ingress-502-wrong-port",
+  "namespace": "pb-08",
+  "started": "2026-10-20T19:54:12-0700",
+  "kubectl": "v1.34.0",
+  "steps": [
+    {
+      "phase": "setup",
+      "cmd": "$DIR/../../scripts/install-ingress-nginx.sh",
+      "rc": 0,
+      "output": "deployment \"ingress-nginx-controller\" successfully rolled out",
+      "show": false
+    },
+    {
+      "phase": "break",
+      "cmd": "kubectl -n pb-08 apply -f $DIR/broken.yaml",
+      "rc": 0,
+      "output": "deployment.apps/shop created\nservice/shop created\ningress.networking.k8s.io/shop created",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS get pods,svc,ingress",
+      "rc": 0,
+      "output": "NAME                        READY   STATUS    RESTARTS   AGE\npod/shop-67c6c7f44d-cq5h8   1/1     Running   0          7s\n\nNAME           TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE\nservice/shop   ClusterIP   10.96.104.164   <none>        80/TCP    7s\n\nNAME                             CLASS   HOSTS               ADDRESS   PORTS   AGE\ningress.networking.k8s.io/shop   nginx   shop.example.test             80      7s",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS run client --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -S -O /dev/null -T 5 --header \"Host: shop.example.test\" http://ingress-nginx-controller.ingress-nginx.svc/ 2>&1 | grep HTTP/' 2>&1 | grep -v 'pod .* deleted'",
+      "rc": 0,
+      "output": "  HTTP/1.1 502 Bad Gateway\nwget: server returned error: HTTP/1.1 502 Bad Gateway",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n ingress-nginx logs deploy/ingress-nginx-controller --tail=50 | grep -E 'connect\\(\\) failed|upstream' | tail -2",
+      "rc": 0,
+      "output": "2026/10/21 02:54:20 [error] 839#839: *9302 connect() failed (111: Connection refused) while connecting to upstream, client: 10.244.0.132, server: shop.example.test, request: \"GET / HTTP/1.1\", upstream: \"http://10.244.0.129:8080/\", host: \"shop.example.test\"\n2026/10/21 02:54:20 [error] 839#839: *9302 connect() failed (111: Connection refused) while connecting to upstream, client: 10.244.0.132, server: shop.example.test, request: \"GET / HTTP/1.1\", upstream: \"http://10.244.0.129:8080/\", host: \"shop.example.test\"",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get svc shop -o jsonpath='port={.spec.ports[0].port} targetPort={.spec.ports[0].targetPort}{\"\\n\"}'",
+      "rc": 0,
+      "output": "port=80 targetPort=8080",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get endpointslices -l kubernetes.io/service-name=shop -o custom-columns=NAME:.metadata.name,PORTS:.ports[*].port,ADDRESSES:.endpoints[*].addresses[0]",
+      "rc": 0,
+      "output": "NAME         PORTS   ADDRESSES\nshop-xb6lw   8080    10.244.0.129",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS get pod -l app=shop -o jsonpath='containerPort={.items[0].spec.containers[0].ports[0].containerPort}{\"\\n\"}'",
+      "rc": 0,
+      "output": "containerPort=80",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n pb-08 apply -f $DIR/fixed.yaml",
+      "rc": 0,
+      "output": "deployment.apps/shop unchanged\nservice/shop configured\ningress.networking.k8s.io/shop unchanged",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS run client --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -S -O /dev/null -T 5 --header \"Host: shop.example.test\" http://ingress-nginx-controller.ingress-nginx.svc/ 2>&1 | grep HTTP/' 2>&1 | grep -v 'pod .* deleted'",
+      "rc": 0,
+      "output": "  HTTP/1.1 200 OK",
+      "show": true
+    }
+  ],
+  "broken_detected": true,
+  "broken_after_s": 6.6,
+  "fixed": true,
+  "recovery_s": 6.9,
+  "finished": "2026-10-20T19:54:30-0700"
+}

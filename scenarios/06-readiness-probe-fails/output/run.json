@@ -1,0 +1,83 @@
+{
+  "scenario": "06-readiness-probe-fails",
+  "namespace": "pb-06",
+  "started": "2026-10-20T19:53:45-0700",
+  "kubectl": "v1.34.0",
+  "steps": [
+    {
+      "phase": "break",
+      "cmd": "kubectl -n pb-06 apply -f $DIR/broken.yaml",
+      "rc": 0,
+      "output": "deployment.apps/storefront created\nservice/storefront created",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                          READY   STATUS    RESTARTS   AGE\nstorefront-6db9b66896-24d88   0/1     Running   0          13s\nstorefront-6db9b66896-bb5gw   0/1     Running   0          13s",
+      "show": true
+    },
+    {
+      "phase": "symptom",
+      "cmd": "kubectl -n $NS get endpointslices -l kubernetes.io/service-name=storefront -o custom-columns='NAME:.metadata.name,ADDRESSES:.endpoints[*].addresses[0],READY:.endpoints[*].conditions.ready'",
+      "rc": 0,
+      "output": "NAME               ADDRESSES                   READY\nstorefront-6ksnv   10.244.0.119,10.244.0.120   false,false",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS describe pod -l app=storefront | grep -E 'Readiness|Unhealthy' | sort -u | cut -c1-160",
+      "rc": 0,
+      "output": "    Readiness:    http-get http://:http/healthz delay=0s timeout=1s period=5s successThreshold=1 failureThreshold=2",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS logs deploy/storefront --tail=3",
+      "rc": 0,
+      "output": "10.244.0.1 - - [21/Oct/2026:02:53:52 +0000] \"GET /healthz HTTP/1.1\" 404 153 \"-\" \"kube-probe/1.34\" \"-\"\n2026/10/21 02:53:57 [error] 37#37: *4 open() \"/usr/share/nginx/html/healthz\" failed (2: No such file or directory), client: 10.244.0.1, server: localhost, request: \"GET /healthz HTTP/1.1\", host: \"10.244.0.119:80\"\n10.244.0.1 - - [21/Oct/2026:02:53:57 +0000] \"GET /healthz HTTP/1.1\" 404 153 \"-\" \"kube-probe/1.34\" \"-\"\nFound 2 pods, using pod/storefront-6db9b66896-24d88",
+      "show": true
+    },
+    {
+      "phase": "diagnose",
+      "cmd": "kubectl -n $NS run probe-test --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -qO- -T 3 http://storefront/ >/dev/null && echo OK || echo \"request failed: no ready endpoints\"' 2>&1 | grep -v 'pod .* deleted'",
+      "rc": 0,
+      "output": "All commands and output from this session will be recorded in container logs, including credentials and sensitive information passed through the command prompt.\nIf you don't see a command prompt, try pressing enter.\nwget: can't connect to remote host (10.96.220.149): Connection refused\nrequest failed: no ready endpoints",
+      "show": true
+    },
+    {
+      "phase": "fix",
+      "cmd": "kubectl -n pb-06 apply -f $DIR/fixed.yaml",
+      "rc": 0,
+      "output": "deployment.apps/storefront configured\nservice/storefront unchanged",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS get pods",
+      "rc": 0,
+      "output": "NAME                          READY   STATUS        RESTARTS   AGE\nstorefront-66549fd686-d6vk7   1/1     Running       0          1s\nstorefront-66549fd686-kmntr   1/1     Running       0          2s\nstorefront-6db9b66896-24d88   0/1     Terminating   0          19s",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS get endpointslices -l kubernetes.io/service-name=storefront -o custom-columns='NAME:.metadata.name,ADDRESSES:.endpoints[*].addresses[0],READY:.endpoints[*].conditions.ready'",
+      "rc": 0,
+      "output": "NAME               ADDRESSES                                READY\nstorefront-6ksnv   10.244.0.119,10.244.0.122,10.244.0.123   false,true,true",
+      "show": true
+    },
+    {
+      "phase": "verify",
+      "cmd": "kubectl -n $NS run probe-test --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -qO- -T 3 http://storefront/ | grep -o \"<title>.*</title>\"' 2>&1 | grep -v 'pod .* deleted'",
+      "rc": 0,
+      "output": "<title>Welcome to nginx!</title>",
+      "show": true
+    }
+  ],
+  "broken_detected": true,
+  "broken_after_s": 13.1,
+  "fixed": true,
+  "recovery_s": 2.0,
+  "finished": "2026-10-20T19:54:06-0700"
+}
