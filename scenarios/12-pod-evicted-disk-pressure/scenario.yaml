@@ -1,0 +1,37 @@
+title: "Pods evicted: ephemeral storage (disk) limit exceeded"
+symptom_text: "Pods show `Evicted` (STATUS Failed) and are replaced again and again."
+broken_when: kubectl -n $NS get pods -l app=log-writer -o jsonpath='{.items[*].status.reason}' | grep -q Evicted
+broken_timeout: 240
+symptom:
+  - kubectl -n $NS get pods
+diagnose:
+  - |-
+    kubectl -n $NS get pods -l app=log-writer -o jsonpath='{range .items[?(@.status.reason=="Evicted")]}{.metadata.name}{"  "}{.status.message}{"\n"}{end}' | head -2
+  - kubectl -n $NS get events --field-selector reason=Evicted -o custom-columns=REASON:.reason,MESSAGE:.message | head -3
+  - kubectl describe node | grep -E 'DiskPressure|MemoryPressure|PIDPressure'
+  - |-
+    kubectl -n $NS get deploy log-writer -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}'
+fix:
+  - kubectl -n $NS apply -f $DIR/fixed.yaml
+  - kubectl -n $NS rollout status deploy/log-writer --timeout=120s
+  # clean up the old evicted pods (they stay as Failed objects until deleted)
+  - kubectl -n $NS delete pods --field-selector=status.phase=Failed
+healthy_when: |-
+  sleep 45 && test -z "$(kubectl -n $NS get pods -l app=log-writer -o jsonpath='{.items[*].status.reason}')" && kubectl -n $NS rollout status deploy/log-writer --timeout=5s
+fix_timeout: 300
+verify:
+  - kubectl -n $NS get pods
+  - kubectl -n $NS exec deploy/log-writer -- du -sh /scratch
+root_cause: >-
+  The container writes a new 20 MB file every 2 seconds and never deletes old ones. Its
+  `ephemeral-storage` limit is 100Mi, so the kubelet evicts the pod once usage passes the limit. The
+  Deployment creates a new pod, which fills up again. Without a limit the same app would fill the node
+  disk, the node would report `DiskPressure`, and the kubelet would evict *other* pods too.
+fix_text: >-
+  Fix the app to rotate its files, and write to a size-limited `emptyDir`. Delete the old Evicted pod
+  objects; they do not go away by themselves.
+prevention:
+  - Set `ephemeral-storage` requests/limits so one noisy pod cannot fill a node.
+  - Log to stdout and let the runtime rotate logs.
+  - Alerts `NodeDiskAlmostFull` (node disk) and `KubeNodeNotReady` (if the node goes NotReady).
+alerts: [NodeDiskAlmostFull, KubeNodeNotReady]

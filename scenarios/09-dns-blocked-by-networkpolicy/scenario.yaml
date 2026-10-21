@@ -1,0 +1,29 @@
+title: "DNS lookup fails inside the cluster: NetworkPolicy blocks CoreDNS"
+not_verified_reason: >-
+  On my test machine the NetworkPolicy was not enforced: kind's default CNI (kindnet) needs the
+  kernel's nfqueue support for NetworkPolicy, and that kernel did not have it, so DNS kept working.
+  To reproduce it, use a cluster whose CNI enforces NetworkPolicy (for example Calico or Cilium).
+symptom_text: "After a security change, the app cannot resolve any name (`bad address`, `i/o timeout`), but CoreDNS itself is healthy."
+broken_when: kubectl -n $NS rollout status deploy/api --timeout=5s && ! kubectl -n $NS exec deploy/api -- nslookup -timeout=2 kubernetes.default.svc.cluster.local >/dev/null 2>&1
+symptom:
+  - kubectl -n $NS exec deploy/api -- nslookup -timeout=2 kubernetes.default.svc.cluster.local
+diagnose:
+  - kubectl -n kube-system get pods -l k8s-app=kube-dns
+  - kubectl run dns-check -n default --rm -i --restart=Never --image=busybox:1.36 -- nslookup -timeout=2 kubernetes.default.svc.cluster.local 2>&1 | grep -v 'pod .* deleted'
+  - kubectl -n $NS exec deploy/api -- cat /etc/resolv.conf
+  - kubectl -n $NS get networkpolicy
+  - kubectl -n $NS describe networkpolicy default-deny-egress | sed -n '/Spec:/,$p'
+healthy_when: kubectl -n $NS exec deploy/api -- nslookup -timeout=2 kubernetes.default.svc.cluster.local >/dev/null 2>&1
+verify:
+  - kubectl -n $NS exec deploy/api -- nslookup -timeout=2 kubernetes.default.svc.cluster.local
+root_cause: >-
+  An egress NetworkPolicy selects every pod in the namespace and only allows TCP/80 to pods in the
+  same namespace. DNS goes to CoreDNS in `kube-system` on UDP/TCP 53, which is now denied. The same
+  lookup from another namespace works, which proves CoreDNS is fine and the problem is local.
+fix_text: >-
+  Add an egress rule that allows UDP and TCP 53 to the `kube-dns` pods in `kube-system`.
+prevention:
+  - Every default-deny egress policy ships with a DNS allow rule (keep it in a shared template).
+  - Test from inside the namespace (`kubectl exec ... nslookup`) after any NetworkPolicy change.
+  - Alert on CoreDNS health (`CoreDNSDown` from the default rules) and on app error rate.
+alerts: [AppHighErrorRate]

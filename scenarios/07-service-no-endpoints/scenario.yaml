@@ -1,0 +1,29 @@
+title: "Service has no endpoints: label selector does not match the pods"
+symptom_text: "Pods are Running and Ready, but calls to the Service time out or are refused."
+broken_when: kubectl -n $NS rollout status deploy/frontend --timeout=5s
+symptom:
+  - kubectl -n $NS get pods,svc
+  - |-
+    kubectl -n $NS run client --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -qO- -T 3 http://frontend/ >/dev/null && echo OK || echo "request failed"' 2>&1 | grep -v 'pod .* deleted'
+diagnose:
+  - kubectl -n $NS get endpointslices -l kubernetes.io/service-name=frontend
+  - |-
+    kubectl -n $NS get svc frontend -o jsonpath='{.spec.selector}{"\n"}'
+  - kubectl -n $NS get pods --show-labels
+healthy_when: |-
+  test -n "$(kubectl -n $NS get endpointslices -l kubernetes.io/service-name=frontend -o jsonpath='{.items[*].endpoints[*].addresses[0]}')"
+verify:
+  - kubectl -n $NS get endpointslices -l kubernetes.io/service-name=frontend
+  - |-
+    kubectl -n $NS run client --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -qO- -T 3 http://frontend/ | grep -o "<title>.*</title>"' 2>&1 | grep -v 'pod .* deleted'
+root_cause: >-
+  The Service selects `app=web-frontend`, but the pods are labelled `app=frontend`. A Service only
+  sends traffic to pods whose labels match its selector, so its endpoint list is empty.
+fix_text: >-
+  Make the selector match the pod template labels (`app: frontend`). Endpoints appear within seconds.
+prevention:
+  - Generate Service selectors and pod labels from the same Helm helper (`selectorLabels`).
+  - |-
+    First check in any "service does not answer" case: `kubectl get endpointslices`.
+  - Probe the service with a blackbox exporter `probe_success` alert (app-level check).
+alerts: []

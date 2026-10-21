@@ -1,0 +1,36 @@
+title: "Ingress returns 502: Service targetPort does not match the container port"
+symptom_text: "The Ingress answers, but every request gets 502 Bad Gateway."
+setup:
+  - $DIR/../../scripts/install-ingress-nginx.sh
+broken_when: |-
+  test "$(kubectl -n $NS run c0 --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -S -O /dev/null -T 5 --header "Host: shop.example.test" http://ingress-nginx-controller.ingress-nginx.svc/ 2>&1 | grep -o "HTTP/1.1 [0-9]*" | head -1' 2>/dev/null | grep -o '[0-9]\{3\}' | head -1)" = 502
+symptom:
+  - kubectl -n $NS get pods,svc,ingress
+  - |-
+    kubectl -n $NS run client --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -S -O /dev/null -T 5 --header "Host: shop.example.test" http://ingress-nginx-controller.ingress-nginx.svc/ 2>&1 | grep HTTP/' 2>&1 | grep -v 'pod .* deleted'
+diagnose:
+  - kubectl -n ingress-nginx logs deploy/ingress-nginx-controller --tail=50 | grep -E 'connect\(\) failed|upstream' | tail -2
+  - |-
+    kubectl -n $NS get svc shop -o jsonpath='port={.spec.ports[0].port} targetPort={.spec.ports[0].targetPort}{"\n"}'
+  - kubectl -n $NS get endpointslices -l kubernetes.io/service-name=shop -o custom-columns=NAME:.metadata.name,PORTS:.ports[*].port,ADDRESSES:.endpoints[*].addresses[0]
+  - |-
+    kubectl -n $NS get pod -l app=shop -o jsonpath='containerPort={.items[0].spec.containers[0].ports[0].containerPort}{"\n"}'
+healthy_when: |-
+  test "$(kubectl -n $NS run c1 --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -S -O /dev/null -T 5 --header "Host: shop.example.test" http://ingress-nginx-controller.ingress-nginx.svc/ 2>&1 | grep -o "HTTP/1.1 [0-9]*" | head -1' 2>/dev/null | grep -o '[0-9]\{3\}' | head -1)" = 200
+verify:
+  - |-
+    kubectl -n $NS run client --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -S -O /dev/null -T 5 --header "Host: shop.example.test" http://ingress-nginx-controller.ingress-nginx.svc/ 2>&1 | grep HTTP/' 2>&1 | grep -v 'pod .* deleted'
+root_cause: >-
+  Ingress → Service → Pod each have their own port. The Ingress points to Service port 80, which is
+  correct, but the Service forwards to `targetPort: 8080` while nginx listens on 80. The controller
+  connects to podIP:8080, gets "connection refused", and returns 502. (A 404 from the controller
+  usually means the host/path does not match any Ingress rule, or `ingressClassName` is missing.)
+fix_text: >-
+  Set `targetPort` to the port the container really listens on (or to a named port like `http`).
+prevention:
+  - |-
+    Use named ports (`containerPort` with `name: http`, `targetPort: http`) so the numbers live in one place.
+  - |-
+    Read the ingress controller log: `connect() failed (111: Connection refused)` = wrong port or app down.
+  - Alert on ingress 5xx rate (`AppHighErrorRate` pattern on `nginx_ingress_controller_requests`).
+alerts: [AppHighErrorRate]

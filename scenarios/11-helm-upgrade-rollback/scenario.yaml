@@ -1,0 +1,42 @@
+title: "Helm upgrade fails: roll back first, then fix the values"
+symptom_text: "`helm upgrade --wait` times out and the release is marked failed. New pods are in ImagePullBackOff; the old ones still serve."
+cmd_timeout: 240
+break:
+  - helm upgrade --install catalog $DIR/chart -n $NS -f $DIR/values-v1.yaml --wait --timeout 120s
+  - helm upgrade catalog $DIR/chart -n $NS -f $DIR/broken.yaml --wait --timeout 60s
+broken_when: |-
+  helm -n $NS status catalog -o json | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["info"]["status"]=="failed" else 1)'
+symptom:
+  - helm -n $NS history catalog
+  - kubectl -n $NS get pods
+diagnose:
+  - kubectl -n $NS get rs -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,IMAGE:.spec.template.spec.containers[0].image
+  - kubectl -n $NS get events --field-selector reason=Failed -o custom-columns=MESSAGE:.message | cut -c1-220 | head -3
+  - helm -n $NS get values catalog
+fix:
+  - helm -n $NS rollback catalog 1 --wait --timeout 120s
+  - helm -n $NS history catalog
+  - helm upgrade catalog $DIR/chart -n $NS -f $DIR/fixed.yaml --wait --timeout 120s
+healthy_when: |-
+  helm -n $NS status catalog -o json | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["info"]["status"]=="deployed" and d["version"]==4 else 1)'
+verify:
+  - helm -n $NS history catalog
+  - kubectl -n $NS get pods -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,IMAGE:.spec.containers[0].image
+teardown:
+  - helm -n $NS uninstall catalog
+root_cause: >-
+  The upgrade changed the image tag to `1.28-alpne` (typo). New pods cannot pull it, so `--wait`
+  times out and Helm marks revision 2 as failed. Because the Deployment uses `maxUnavailable: 0`, the
+  old pods from revision 1 keep serving, but the release is now in a bad state and the next upgrade
+  starts from it.
+fix_text: >-
+  First `helm rollback catalog 1` to get back to a known-good revision (it becomes revision 3), then
+  fix the values and upgrade again (revision 4). Do not "fix forward" from a failed revision under
+  pressure.
+prevention:
+  - Use `helm upgrade --atomic` (rolls back automatically on failure) in CI.
+  - Run `helm diff upgrade` (plugin) or `helm template | kubeconform` before upgrading.
+  - |-
+    Keep `maxUnavailable: 0` so a bad rollout never takes the old pods down.
+  - Alerts `PodImagePullFailing`, `DeploymentReplicasMismatch`.
+alerts: [PodImagePullFailing, DeploymentReplicasMismatch]

@@ -1,0 +1,26 @@
+title: "Missing ConfigMap / Secret: pod stuck in CreateContainerConfigError"
+symptom_text: "The pod never starts; STATUS shows CreateContainerConfigError. There are no logs."
+broken_when: kubectl -n $NS get pods -l app=notifier -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -q CreateContainerConfigError
+symptom:
+  - kubectl -n $NS get pods
+diagnose:
+  - kubectl -n $NS logs deploy/notifier
+  - kubectl -n $NS describe pod -l app=notifier | sed -n '/Events:/,$p' | grep -E 'Warning|Failed' | head -3
+  - kubectl -n $NS get configmap,secret
+healthy_when: kubectl -n $NS rollout status deploy/notifier --timeout=5s
+verify:
+  - kubectl -n $NS get pods
+  - kubectl -n $NS logs deploy/notifier
+root_cause: >-
+  The container reads `MODE` from ConfigMap `notifier-config` and `SMTP_PASSWORD` from Secret
+  `notifier-smtp`. Neither exists, so the kubelet cannot build the container config and never starts
+  it. The event names only the first missing object; fix it and the next one appears.
+fix_text: >-
+  Create the ConfigMap and the Secret (the fixed manifest includes them; in real life the Secret comes
+  from your secret manager, not from git). The kubelet retries and the pod starts by itself.
+prevention:
+  - Deploy config objects in the same Helm release / kustomization as the app.
+  - |-
+    Use `optional: true` only for truly optional keys.
+  - Alert `PodNotReady` / `DeploymentReplicasMismatch`.
+alerts: [DeploymentReplicasMismatch]

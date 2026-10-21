@@ -1,0 +1,5 @@
+# Release 2 (broken): someone bumped the tag to one that was never published.
+# helm upgrade --wait times out, the release is marked "failed",
+# and the old ReplicaSet keeps serving (maxUnavailable: 0).
+image:
+  tag: "1.28-alpne"
