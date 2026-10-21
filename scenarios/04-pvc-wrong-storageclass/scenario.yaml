@@ -1,0 +1,30 @@
+title: "Pending: PersistentVolumeClaim not bound (wrong StorageClass)"
+symptom_text: "The pod is Pending, and the PVC is Pending too."
+broken_when: kubectl -n $NS get pvc uploads -o jsonpath='{.status.phase}' | grep -q Pending && kubectl -n $NS get events --field-selector involvedObject.name=uploads -o name | grep -q .
+symptom:
+  - kubectl -n $NS get pods,pvc
+diagnose:
+  - kubectl -n $NS describe pod -l app=uploader | sed -n '/Events:/,$p'
+  - kubectl -n $NS describe pvc uploads | sed -n '/StorageClass:/p;/Events:/,$p'
+  - kubectl get storageclass
+fix:
+  # storageClassName is immutable on a PVC: delete and recreate it (no data yet, so this is safe here)
+  - kubectl -n $NS delete deploy uploader --wait=true
+  - kubectl -n $NS delete pvc uploads --wait=true
+  - kubectl -n $NS apply -f $DIR/fixed.yaml
+healthy_when: kubectl -n $NS rollout status deploy/uploader --timeout=5s && kubectl -n $NS get pvc uploads -o jsonpath='{.status.phase}' | grep -q Bound
+verify:
+  - kubectl -n $NS get pods,pvc
+  - kubectl -n $NS exec deploy/uploader -- cat /data/health
+root_cause: >-
+  The PVC asks for `storageClassName: fast-ssd`, which does not exist in this cluster, so no
+  provisioner ever creates a volume and the PVC stays Pending. The pod waits for its volume.
+fix_text: >-
+  Use an existing class (`kubectl get storageclass`; on kind it is `standard`). `storageClassName`
+  cannot be changed on an existing PVC, so delete and recreate it. On a PVC that already holds data,
+  back the data up first.
+prevention:
+  - Keep the StorageClass name in Helm values per environment, not hard-coded.
+  - Mark one class as default so PVCs without a class still bind.
+  - Alert `PodNotReady`; PVC alerts (`PVCAlmostFull`, `PVCFull`) take over once it is bound.
+alerts: [PodNotReady]

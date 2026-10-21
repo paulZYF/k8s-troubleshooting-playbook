@@ -1,0 +1,26 @@
+title: "ImagePullBackOff: wrong image tag"
+symptom_text: "The pod stays in ErrImagePull / ImagePullBackOff and never starts."
+broken_when: kubectl -n $NS get pods -l app=web -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -qE 'ImagePullBackOff|ErrImagePull'
+symptom:
+  - kubectl -n $NS get pods
+diagnose:
+  - kubectl -n $NS describe pod -l app=web | sed -n '/Events:/,$p'
+  - |-
+    kubectl -n $NS get deploy web -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+healthy_when: kubectl -n $NS rollout status deploy/web --timeout=5s
+verify:
+  - kubectl -n $NS get pods
+  - |-
+    kubectl -n $NS get deploy web -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+root_cause: >-
+  The tag `nginx:1.27.99-alpine` does not exist in the registry, so the kubelet gets "not found" and
+  backs off. The same symptom appears with a private image and no `imagePullSecrets` (the event then
+  says "unauthorized" or "pull access denied" instead of "not found").
+fix_text: >-
+  Use a tag that exists (`nginx:1.27-alpine`). For private registries, create a
+  `docker-registry` Secret and add it under `imagePullSecrets`.
+prevention:
+  - Pin images by tag that CI has just pushed (or by digest), never type tags by hand.
+  - Check the event text first; "not found" and "unauthorized" have different fixes.
+  - Alert `PodImagePullFailing` (warning, 10m).
+alerts: [PodImagePullFailing]

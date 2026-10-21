@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  labels: {app: storefront}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: storefront}
+  template:
+    metadata:
+      labels: {app: storefront}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{name: http, containerPort: 80}]
+          readinessProbe:
+            httpGet: {path: /, port: http}   # a path the app really serves
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: storefront
+spec:
+  selector: {app: storefront}
+  ports: [{name: http, port: 80, targetPort: http}]

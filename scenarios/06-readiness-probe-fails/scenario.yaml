@@ -1,0 +1,31 @@
+title: "Readiness probe fails: pod is Running but gets no traffic"
+symptom_text: "Pods are Running with 0 restarts, but READY is 0/1 and the Service sends no traffic to them."
+broken_when: test "$(kubectl -n $NS get events --field-selector reason=Unhealthy -o name | wc -l)" -ge 2 && sleep 10
+symptom:
+  - kubectl -n $NS get pods
+  - |-
+    kubectl -n $NS get endpointslices -l kubernetes.io/service-name=storefront -o custom-columns='NAME:.metadata.name,ADDRESSES:.endpoints[*].addresses[0],READY:.endpoints[*].conditions.ready'
+diagnose:
+  - kubectl -n $NS describe pod -l app=storefront | grep -E 'Readiness|Unhealthy' | sort -u | cut -c1-160
+  - kubectl -n $NS logs deploy/storefront --tail=3
+  - |-
+    kubectl -n $NS run probe-test --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -qO- -T 3 http://storefront/ >/dev/null && echo OK || echo "request failed: no ready endpoints"' 2>&1 | grep -v 'pod .* deleted'
+healthy_when: kubectl -n $NS rollout status deploy/storefront --timeout=5s
+verify:
+  - kubectl -n $NS get pods
+  - |-
+    kubectl -n $NS get endpointslices -l kubernetes.io/service-name=storefront -o custom-columns='NAME:.metadata.name,ADDRESSES:.endpoints[*].addresses[0],READY:.endpoints[*].conditions.ready'
+  - |-
+    kubectl -n $NS run probe-test --rm -i --restart=Never --image=busybox:1.36 -- sh -c 'wget -qO- -T 3 http://storefront/ | grep -o "<title>.*</title>"' 2>&1 | grep -v 'pod .* deleted'
+root_cause: >-
+  The readiness probe calls `/healthz`, which nginx does not serve (404). A failing readiness probe
+  does not restart the pod; it only removes it from the Service endpoints. So the pod looks healthy
+  in `get pods` (Running, 0 restarts) but receives no traffic.
+fix_text: >-
+  Point the probe at a path the app really serves (`/` here, or add a real health endpoint).
+prevention:
+  - Test the probe path with `kubectl exec ... wget/curl` before shipping.
+  - |-
+    Readiness = "can serve traffic now", liveness = "is stuck, restart me"; don't share one strict endpoint.
+  - Alert `DeploymentReplicasMismatch` (available < desired for 15m).
+alerts: [DeploymentReplicasMismatch]

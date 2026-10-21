@@ -1,0 +1,24 @@
+title: "Pending: not enough CPU / memory on any node"
+symptom_text: "The pod stays Pending forever. Nothing is wrong with the image or the app."
+broken_when: kubectl -n $NS get events --field-selector reason=FailedScheduling -o name | grep -q .
+symptom:
+  - kubectl -n $NS get pods
+diagnose:
+  - kubectl -n $NS describe pod -l app=analytics | sed -n '/Events:/,$p'
+  - kubectl get nodes -o custom-columns=NODE:.metadata.name,CPU:.status.allocatable.cpu,MEMORY:.status.allocatable.memory
+  - kubectl describe nodes | sed -n '/Allocated resources:/,/Events:/p'
+healthy_when: kubectl -n $NS rollout status deploy/analytics --timeout=5s
+verify:
+  - kubectl -n $NS get pods
+root_cause: >-
+  The pod requests 64 CPUs and 256 GiB memory. The scheduler only places a pod on a node whose
+  *allocatable minus already-requested* resources fit the request, so no node qualifies. Requests,
+  not real usage, decide scheduling.
+fix_text: >-
+  Size requests from real usage (`kubectl top pod`, or the Grafana memory panel) plus headroom.
+  If the workload really needs it, add a node pool that is big enough.
+prevention:
+  - Set requests from measured usage; review them like code.
+  - Use a LimitRange / ResourceQuota per namespace to block absurd values.
+  - Alert `PodNotReady` (pod Pending > 15m).
+alerts: [PodNotReady]

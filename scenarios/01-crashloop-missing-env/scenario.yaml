@@ -1,0 +1,25 @@
+title: "CrashLoopBackOff: app exits because a required env var is missing"
+symptom_text: "The pod restarts again and again and shows CrashLoopBackOff. The Deployment never becomes available."
+broken_when: kubectl -n $NS get pods -l app=orders-api -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' | grep -q CrashLoopBackOff
+symptom:
+  - kubectl -n $NS get pods
+diagnose:
+  - kubectl -n $NS logs deploy/orders-api --previous
+  - kubectl -n $NS describe pod -l app=orders-api | sed -n '/Containers:/,/Conditions:/p' | grep -E 'State|Reason|Exit Code|Restart Count|Last State'
+  - kubectl -n $NS get events --field-selector reason=BackOff -o custom-columns=REASON:.reason,OBJECT:.involvedObject.name,MESSAGE:.message
+healthy_when: kubectl -n $NS rollout status deploy/orders-api --timeout=5s
+verify:
+  - kubectl -n $NS get pods
+  - kubectl -n $NS logs deploy/orders-api
+root_cause: >-
+  The container exits with code 1 at start because `DATABASE_URL` is not set. Kubernetes restarts it,
+  each time with a longer back-off delay, which is what CrashLoopBackOff means. The pod events alone
+  do not tell you why; the logs of the *previous* container do.
+fix_text: >-
+  Store the value in a Secret and inject it with `env.valueFrom.secretKeyRef`. Apply the fixed manifest;
+  the Deployment rolls out a new pod that starts normally.
+prevention:
+  - Validate required config at start and print a clear error (this app does), so `logs --previous` is useful.
+  - Keep env vars in the manifest / Helm values next to the code, review them in the PR.
+  - Alert `PodCrashLooping` (warning, 5m).
+alerts: [PodCrashLooping]

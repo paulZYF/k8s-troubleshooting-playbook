@@ -1,0 +1,30 @@
+title: "OOMKilled: memory limit too low"
+symptom_text: "The pod restarts every few seconds; the restart count keeps going up."
+broken_when: |-
+  set -- $(kubectl -n $NS get pods -l app=report-worker -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.exitCode} {.items[0].status.containerStatuses[0].restartCount}'); test "$1" = 137 && test "$2" -ge 2
+symptom:
+  - kubectl -n $NS get pods
+diagnose:
+  - kubectl -n $NS describe pod -l app=report-worker | sed -n '/Containers:/,/Conditions:/p' | grep -E 'State|Reason|Exit Code|Restart Count|Limits|memory'
+  - kubectl -n $NS logs deploy/report-worker --previous
+  - kubectl -n $NS get events --sort-by=.lastTimestamp -o custom-columns=REASON:.reason,MESSAGE:.message | tail -5
+healthy_when: |-
+  kubectl -n $NS rollout status deploy/report-worker --timeout=5s && sleep 20 && test "$(kubectl -n $NS get pods -l app=report-worker --field-selector=status.phase=Running -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')" = 0
+verify:
+  - kubectl -n $NS get pods
+  - |-
+    kubectl -n $NS top pod 2>/dev/null || echo "(metrics-server not installed; see Grafana 'Workload health' for memory usage)"
+root_cause: >-
+  The worker needs about 150 MiB but the container limit is 64 MiB. When the process goes over the
+  limit, the kernel OOM killer kills it with SIGKILL (`Exit Code: 137` = 128 + 9). Usually the
+  reason is `OOMKilled`; when the container dies very quickly, some containerd versions report
+  `Reason: Error` instead, so treat exit code 137 together with a low memory limit as an OOM kill.
+  The app log has no error because the process is killed from outside.
+fix_text: >-
+  Raise the memory limit above the real peak (here 256 MiB) and set the request near normal usage
+  (192 MiB) so the scheduler reserves enough memory on the node.
+prevention:
+  - Measure the peak (`container_memory_working_set_bytes`) before setting limits.
+  - For JVM / Node.js, size the heap to the container limit.
+  - Alert `PodOOMKilled` (fires on the first OOM kill), then `PodCrashLooping` if it keeps going.
+alerts: [PodOOMKilled, PodCrashLooping]
